@@ -3,33 +3,155 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>Входящие заявки</title>
   <style>
-    body { max-width: 40rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
+    :root { color-scheme: light dark; }
+    body { max-width: 44rem; margin: 2rem auto; padding: 0 1rem; font: 1rem/1.5 system-ui, sans-serif; }
     textarea { box-sizing: border-box; display: block; width: 100%; margin: .5rem 0; padding: .5rem; font: inherit; }
-    button { padding: .4rem .8rem; font: inherit; }
-    pre { white-space: pre-wrap; }
+    button { padding: .45rem .9rem; font: inherit; cursor: pointer; }
+    button[disabled] { cursor: progress; opacity: .65; }
+    .card { margin-top: 1.25rem; padding: 1rem; border: 1px solid rgba(128, 128, 128, .35); border-radius: .5rem; }
+    .card[hidden] { display: none; }
+    .status { margin: 0; font-weight: 600; }
+    .status.error { color: #c0392b; }
+    .topic { margin: .5rem 0 0; }
+    .draft { margin-top: 1rem; }
+    .draft h2 { margin: 0 0 .35rem; font-size: 1rem; }
+    .draft pre { margin: 0; white-space: pre-wrap; font: inherit; }
+    .hint { color: #777; font-size: .9rem; }
   </style>
 </head>
 <body>
   <h1>Входящие заявки</h1>
-  <form>
+  <p class="hint">Вставьте текст заявки. AI предложит тему и черновик ответа — решение остаётся за менеджером.</p>
+
+  <form id="triage-form" novalidate>
     <label for="message">Текст заявки</label>
-    <textarea id="message" rows="4"></textarea>
-    <button type="submit">Разобрать заявку</button>
+    <textarea id="message" rows="5" required></textarea>
+    <button type="submit" id="submit">Разобрать заявку</button>
   </form>
-  <pre id="result" aria-live="polite"></pre>
+
+  <section class="card" id="result" aria-live="polite" data-status="" hidden>
+    <p class="status" id="status"></p>
+    <p class="topic" id="topic" hidden></p>
+    <div class="draft" id="draft-block" hidden>
+      <h2>Черновик ответа</h2>
+      <pre id="draft"></pre>
+    </div>
+  </section>
+
   <script type="module">
-    const form = document.querySelector("form");
+    const form = document.querySelector("#triage-form");
+    const message = document.querySelector("#message");
+    const submit = document.querySelector("#submit");
     const result = document.querySelector("#result");
+    const statusEl = document.querySelector("#status");
+    const topicEl = document.querySelector("#topic");
+    const draftBlock = document.querySelector("#draft-block");
+    const draftEl = document.querySelector("#draft");
+
+    const TOPIC_LABELS = { delivery: "Доставка", pricing: "Цены", other: "Другое" };
+
+    function clearOutput() {
+      statusEl.textContent = "";
+      statusEl.classList.remove("error");
+      topicEl.textContent = "";
+      topicEl.hidden = true;
+      draftEl.textContent = "";
+      draftBlock.hidden = true;
+      result.dataset.status = "";
+      result.hidden = true;
+    }
+
+    function showManualReview() {
+      clearOutput();
+      result.hidden = false;
+      result.dataset.status = "manual_review";
+      statusEl.textContent =
+        "Нужен ручной разбор: автоматически разобрать заявку не удалось. " +
+        "Определите тему и напишите ответ клиенту вручную.";
+      statusEl.classList.add("error");
+    }
+
+    function showInvalidInput() {
+      clearOutput();
+      result.hidden = false;
+      result.dataset.status = "invalid_input";
+      statusEl.textContent = "Введите текст заявки — поле не может быть пустым.";
+      statusEl.classList.add("error");
+      message.focus();
+    }
+
+    function showReady(payload) {
+      clearOutput();
+      result.hidden = false;
+      result.dataset.status = "ready";
+      statusEl.textContent = "Автоматический разбор готов.";
+      topicEl.textContent = `Тема: ${TOPIC_LABELS[payload.topic] ?? "Другое"} (${payload.topic})`;
+      topicEl.hidden = false;
+      draftEl.textContent = payload.draft;
+      draftBlock.hidden = false;
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const reply = await fetch("/api/triage", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: document.querySelector("#message").value }),
-      });
-      result.textContent = JSON.stringify(await reply.json(), null, 2);
+
+      const text = message.value;
+      if (text.trim() === "") {
+        showInvalidInput();
+        return;
+      }
+
+      submit.disabled = true;
+      submit.textContent = "Разбираем…";
+      clearOutput();
+      result.hidden = false;
+      result.dataset.status = "loading";
+      statusEl.textContent = "Разбираем заявку…";
+
+      try {
+        const response = await fetch("/api/triage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text }),
+        });
+
+        if (response.status === 400) {
+          showInvalidInput();
+          return;
+        }
+
+        if (!response.ok) {
+          showManualReview();
+          return;
+        }
+
+        let payload;
+        try {
+          payload = await response.json();
+        } catch {
+          showManualReview();
+          return;
+        }
+
+        if (
+          payload?.status === "ready" &&
+          typeof payload.topic === "string" &&
+          typeof payload.draft === "string" &&
+          payload.draft.trim() !== ""
+        ) {
+          showReady(payload);
+          return;
+        }
+
+        showManualReview();
+      } catch {
+        showManualReview();
+      } finally {
+        submit.disabled = false;
+        submit.textContent = "Разобрать заявку";
+      }
     });
   </script>
 </body>
