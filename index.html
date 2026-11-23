@@ -115,6 +115,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text }),
+          signal: AbortSignal.timeout(5_000),
         });
 
         if (response.status === 400) {
